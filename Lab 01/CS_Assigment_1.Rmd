@@ -1,0 +1,193 @@
+---
+title: "CS_Assigment_01"
+author: "Anna Tsvetkova, Beate Kranz, Jadwiga Krolikowska"
+date: "2024-02-27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Homework Assignment 1
+
+## 1. Create a Monte Carlo simulation to illustrate the problem. 
+
+Firstly, we set the Monte Carlo simulation function for multiple regression. For convenience and simplicity, all coefficients will be units. All variables have normal distribution. On input the function takes n - number of observations and p - number of parameters. The output of the function is the R-squared value. 
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(MASS)
+
+set.seed(42)
+
+# function to fit linear model and to get r-squared
+mc_simulation <- function(n, p) {
+  X <- matrix(rnorm(n * p), nrow = n, ncol = p)
+  beta <- rep(1, p)
+  e <- rnorm(n, mean = 0, sd = 2)
+  y <- X %*% beta + e 
+  fit <- lm(y ~ X)
+  R2 <- summary(fit)$r.squared
+  return(R2)
+}
+```
+
+The second step is to generate the data. We do it with the help of loops. As a result, we get a table with three columns: number of observations, number of parameters and value R-squared.
+
+```{r}
+# setting the number of simulations, observations and predictors
+simulations <- 100
+observations <- seq(5, 50, by = 5)
+predictors <- seq(1, 20, by = 1)
+
+data <- expand.grid(observations = observations, predictors = predictors)
+results <- matrix(nrow = simulations * length(observations) * length(predictors), ncol = 3)
+
+index = 1
+for (i in observations) {
+  for (j in predictors) {
+    for (k in seq(1, simulations)) {
+      results[index,] = c(i, j, mc_simulation(i, j))
+      index <- index + 1
+    }
+  }
+}
+
+res <- as.data.frame(results)
+colnames(res) <- c("observations", "predictors", "r.squared")
+
+```
+
+We will use two graphs to illustrate the problem.
+
+```{r}
+filtered_res <- res %>%
+  filter(observations == 15)
+
+print(filtered_res)
+```
+
+```{r}
+
+# Boxplot of R-squared values grouped by the number of predictors
+ggplot(filtered_res, aes(x = factor(predictors), y = r.squared)) +
+  geom_boxplot() +
+  labs(title = "Distribution of R-squared in relation to Number of Predictors",
+       x = "Number of Predictors",
+       y = "R-squared") +
+  theme_minimal()
+ggsave("boxplot.png")
+```
+For the boxplot, we used a trimmed dataset in which we fixed the number of observations to 15. Each boxplot shows the distribution of the coefficient of determination for a different number of parameters. The trend of increasing R-squared statistics with increasing number of predictors is evident. Moreover, boxplots for 14 parameters or more have 1 as the mean. In other words, adding another predictor does not change the statistic. Therefore, R-squared should not be the basis of choosing a model.
+
+```{r}
+# Heatmap of R-squared in relation to observations and predictors 
+ggplot(res, aes(x = factor(predictors), y = factor(observations), fill = r.squared)) +
+  geom_tile() + 
+  scale_fill_gradient(low = "blue", high = "red", name = "R-squared") +
+  labs(title = "Heatmap of R-squared in relation to Number of Predictors and Observations",
+       x = "No of Predictors",
+       y = "No of Observations") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("heatmap.png")
+
+```
+The heapmap is the second representation of R-squared in relation to number of observations and predictors. The movement to the right, i.e., the increase of parameters leads to the growth of statistics. At the same time, the smaller the number of observations, the more obvious is overfitting.
+
+## 4. Find a real dataset to illustrate the problem and your fix.
+
+In this task we will use the Boston Housing dataset.
+
+```{r}
+# load data about Boston Housing
+bdata <- Boston
+
+head(bdata)
+summary(bdata)
+# check the missing data and duplicates
+sum(is.na(bdata))
+sum(duplicated(bdata))
+
+set.seed(42)
+n_predictors <- ncol(bdata)
+chunk <- bdata[sample(nrow(bdata), size = n_predictors), ] 
+``` 
+No missing or duplicates among the data. 
+
+The target is medv. It is a median value of owner-occupied homes in $1000's. The predictors are: 
+* crim - per capita crime rate by town
+* zn - proportion of residential land zoned for lots over 25,000 sq.ft.
+* ndus - proportion of non-retail business acres per town.
+* chas - Charles River dummy variable (1 if tract bounds river; 0 otherwise)
+* nox - nitric oxides concentration (parts per 10 million)
+* rm - average number of rooms per dwelling
+* age - proportion of owner-occupied units built prior to 1940
+* dis - weighted distances to five Boston employment centres
+* rad - index of accessibility to radial highways
+* tax - full-value property-tax rate per $10,000
+* ptratio - pupil-teacher ratio by town
+* b - 1000(Bk - 0.63)^2 where Bk is the proportion of blacks by town
+* lstat - % lower status of the population
+
+
+We randomly selected 13 entities from the dataset.
+Now we checking the correlation between predictors. 
+```{r}
+ library(corrplot)
+
+corrplot(cor(chunk), method = "color", order = "AOE", diag = FALSE)
+```
+
+From correlation matrix, some of the observations made are as follows:
+*rad and tax have a strong positive correlation which implies that as accessibility of radial highways increases, the full value property-tax rate per $10,000;
+*indus has strong positive correlation with nox, which supports the notion that nitrogen oxides concentration is high in industrial areas;
+etc
+
+We select those predictors that have the lowest correlation with the predicted variable. Then, in the loop, we will model linear regression with a different number of predictors from the ones we selected. 
+
+```{r}
+target <- "medv"
+corrl <- cor(chunk)[, "medv"]
+sorted_cor <- sort(abs(corrl), decreasing = TRUE)
+sorted_cor <- sorted_cor[names(sorted_cor) != "medv"]
+
+# Loop to model regressions with an increasing number of predictors
+reslt <- data.frame(
+  NumPredictors = integer(),
+  RSquared = numeric(),
+  AdjustedRSquared = numeric()
+)
+
+for (i in 1:length(sorted_cor)) {
+  param <- names(sorted_cor)[1:i]
+  reg <- as.formula(paste("medv", "~", paste(param, collapse = "+")))
+  
+  model <- lm(reg, data = chunk)
+  
+  reslt <- rbind(reslt, data.frame(
+    NumPredictors = i,
+    RSquared = summary(model)$r.squared,
+    AdjustedRSquared = summary(model)$adj.r.squared
+  ))
+}
+
+```
+
+```{r}
+library(tidyr)
+# Reshape the data frame to long format
+results_long <- pivot_longer(reslt, cols = c("RSquared", "AdjustedRSquared"), names_to = "metric", values_to = "values")
+
+# Plot the values of r-squared and adjusted r-squared for different models
+ggplot(results_long, aes(x = NumPredictors, y = values, color = metric)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "Number of Predictors", y = "Value", title = "R-squared and Adjusted R-squared vs. Number of Predictors") +
+  scale_color_manual(values = c("RSquared" = "blue", "AdjustedRSquared" = "red"))
+ggsave("scatter.png")
+```
+The graph depicts the different values of R-squared and adjusted R-squared statistics for multiple regression with various number of parameters. As expected, the values for the latter statistics are less. 
+From this plot, the forth predictor is probably insignificant and does not influence the target as the adjusted R-squared decreases, whereas the R-squared grows. In such case, the model with three predictors is more preferred than the model with four predictors.
